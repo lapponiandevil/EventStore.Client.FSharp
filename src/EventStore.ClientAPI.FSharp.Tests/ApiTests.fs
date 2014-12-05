@@ -7,6 +7,7 @@ open Fuchu
 
 open EventStore.ClientAPI
 
+
 [<Tests>]
 let utilities =
   testList "utilities unit tests" [
@@ -89,3 +90,83 @@ let units =
       Assert.Equal("should say it's JSON",
                    true, subject.IsJson)
   ]
+
+open EventStore.ClientAPI.Embedded
+open EventStore.Core
+open System.Net
+open Intelliplan.JsonNet
+
+let with_eventstore f =
+  let node = EmbeddedVNodeBuilder.AsSingleNode()
+                                  .OnDefaultEndpoints()
+                                  .RunInMemory()
+                                  .RunProjections(ProjectionsMode.All)
+                                  .WithWorkerThreads(16)
+                                  .Build()
+  node.Start()
+  f()
+  node.Stop()
+
+type Stomach = { beers_downed : int }
+type Drink =
+  | DrinkABeer
+type Cmd =
+  | OrderABeer
+  | OrderThreeBeers
+
+let empty = { beers_downed = 0 }
+let apply (s : Stomach) = function
+  | DrinkABeer -> s
+let exec (s : Stomach) = function 
+  | CmdT cmd -> [ EventT { id = cmd.id} ]
+
+let aggregate =
+  { Aggregate.zero  = empty
+    Aggregate.apply = apply
+    Aggregate.exec  = exec }
+
+let ser, deser = Serialisation.serialise, Serialisation.deserialise
+
+let test_write conn test_id =
+  let load, commit = Repo.make conn ser deser
+  let handler = Aggregate.makeHandler aggregate load commit
+  let version = NoStream
+  async {
+    let! events, write = handler ("test_stream", version)
+                                 (CmdT({ id = test_id}))
+    do! write
+    return events }
+
+
+[<Tests>]
+let aggregates =
+  testList "aggregates unit tests"  [
+    testCase "should connect and disconnect" <| fun _ ->
+      with_eventstore <| fun _ ->
+        let conn = Conn.configureStart()
+                    |> Conn.configureEnd (IPEndPoint(IPAddress.Loopback, 1113))
+        conn
+        |> Conn.connect
+        |> Async.RunSynchronously
+        conn
+        |> Conn.close
+    testCase "read and write to stream" <| fun _ ->
+      with_eventstore <| fun _ ->
+        let conn = Conn.configureStart()
+                    |> Conn.configureEnd (IPEndPoint(IPAddress.Loopback, 1113))
+        
+        
+        test_write conn "id_1"
+        |> Async.RunSynchronously
+        |> ignore
+
+        test_write conn "id_2"
+        |> Async.RunSynchronously
+        |> ignore
+        // skriv tv[ CMds
+        // ASssert
+                    
+      
+  ]
+
+
