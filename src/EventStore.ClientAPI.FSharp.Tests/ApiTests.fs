@@ -107,18 +107,25 @@ let with_eventstore f =
   f()
   node.Stop()
 
-type Stomach = { beers_downed : int }
-type Drink =
-  | DrinkABeer
+type Stomach = { beers_drunk : int }
+type Event =
+  | DrankABeer
 type Cmd =
-  | OrderABeer
-  | OrderThreeBeers
+  | DrinkABeer
+  | DrinkThreeBeers
 
-let empty = { beers_downed = 0 }
+let empty = { beers_drunk = 0 }
 let apply (s : Stomach) = function
-  | DrinkABeer -> s
+  | DrankABeer ->
+    { s with beers_drunk = s.beers_drunk + 1 }
+
 let exec (s : Stomach) = function 
-  | CmdT cmd -> [ EventT { id = cmd.id} ]
+  | DrinkABeer ->
+    [ DrankABeer ]
+  | DrinkThreeBeers ->
+    [ DrankABeer
+      DrankABeer
+      DrankABeer ]
 
 let aggregate =
   { Aggregate.zero  = empty
@@ -127,13 +134,12 @@ let aggregate =
 
 let ser, deser = Serialisation.serialise, Serialisation.deserialise
 
-let test_write conn test_id =
+let test_write conn stream_name stream_version command =
   let load, commit = Repo.make conn ser deser
   let handler = Aggregate.makeHandler aggregate load commit
-  let version = NoStream
   async {
-    let! events, write = handler ("test_stream", version)
-                                 (CmdT({ id = test_id}))
+    let! events, write = handler (stream_name, stream_version)
+                                 (command)
     do! write
     return events }
 
@@ -154,19 +160,22 @@ let aggregates =
       with_eventstore <| fun _ ->
         let conn = Conn.configureStart()
                     |> Conn.configureEnd (IPEndPoint(IPAddress.Loopback, 1113))
+        conn
+        |> Conn.connect
+        |> Async.RunSynchronously
         
-        
-        test_write conn "id_1"
+        test_write conn "beer_spree" NoStream DrinkABeer
         |> Async.RunSynchronously
         |> ignore
 
-        test_write conn "id_2"
-        |> Async.RunSynchronously
-        |> ignore
-        // skriv tv[ CMds
-        // ASssert
+        let events =
+          test_write conn "beer_spree" (ExpectedVersionUnion.Specific 1u) DrinkThreeBeers
+          |>  Async.RunSynchronously
                     
-      
+        conn
+        |> Conn.close
+
+        Assert.NotEqual("should have evts", [], events)
   ]
 
 
